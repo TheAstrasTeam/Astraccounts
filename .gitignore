@@ -1,5 +1,8 @@
 # Build Artifacts
 Astraccounts.exe
 
+# Local environment
+.env
+
 # OpenCode
 opencode.json
