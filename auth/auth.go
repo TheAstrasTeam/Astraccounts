@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"Astraccounts/logger"
 
@@ -28,6 +29,7 @@ type user struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	UID      int    `json:"UID"`
+	Register int64  `json:"register"`
 }
 
 // UserStore persists users as data/user/[UID]/user.json files.
@@ -80,7 +82,14 @@ func (s *UserStore) register(req registerRequest) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	newUser := user{Username: req.Username, ID: req.ID, Email: req.Email, Password: string(hash), UID: uid}
+	newUser := user{
+		Username: req.Username,
+		ID:       req.ID,
+		Email:    req.Email,
+		Password: string(hash),
+		UID:      uid,
+		Register: time.Now().Unix(),
+	}
 	if err := os.MkdirAll(filepath.Join(s.root, strconv.Itoa(uid)), 0755); err != nil {
 		return 0, 0, err
 	}
