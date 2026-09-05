@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"Astraccounts/logger"
@@ -19,6 +20,7 @@ func main() {
 	}
 
 	configureGinMode()
+	store := newUserStore(filepath.Join("data", "user"))
 
 	r := gin.New()
 	r.Use(logger.GinLogger(), logger.GinRecovery())
@@ -30,6 +32,8 @@ func main() {
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": 200})
 	})
+	r.POST("/api/register", registerHandler(store))
+	r.POST("/api/login", loginHandler(store))
 
 	logger.Info("HTTP server starting", "addr", ":8080")
 	if err := r.Run(":8080"); err != nil {

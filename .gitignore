@@ -4,5 +4,8 @@ Astraccounts.exe
 # Local environment
 .env
 
+# Runtime user data
+data/user/
+
 # OpenCode
 opencode.json
