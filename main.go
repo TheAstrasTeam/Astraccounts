@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"Astraccounts/auth"
 	"Astraccounts/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -20,7 +21,7 @@ func main() {
 	}
 
 	configureGinMode()
-	store := newUserStore(filepath.Join("data", "user"))
+	store := auth.NewUserStore(filepath.Join("data", "user"))
 
 	r := gin.New()
 	r.Use(logger.GinLogger(), logger.GinRecovery())
@@ -32,8 +33,8 @@ func main() {
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": 200})
 	})
-	r.POST("/api/register", registerHandler(store))
-	r.POST("/api/login", loginHandler(store))
+	r.POST("/api/register", auth.RegisterHandler(store))
+	r.POST("/api/login", auth.LoginHandler(store))
 
 	logger.Info("HTTP server starting", "addr", ":8080")
 	if err := r.Run(":8080"); err != nil {

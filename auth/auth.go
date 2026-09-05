@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"encoding/json"
@@ -12,13 +12,14 @@ import (
 	"sync"
 
 	"Astraccounts/logger"
+
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var (
-	idPattern       = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
-	passwordPattern = regexp.MustCompile(`^[A-Za-z0-9_!@#$%^&*]+$`)
+	idPattern  = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+	pwdPattern = regexp.MustCompile(`^[A-Za-z0-9_!@#$%^&*]+$`)
 )
 
 type user struct {
@@ -29,13 +30,15 @@ type user struct {
 	UID      int    `json:"UID"`
 }
 
-type userStore struct {
+// UserStore persists users as data/user/[UID]/user.json files.
+type UserStore struct {
 	root string
 	mu   sync.Mutex
 }
 
-func newUserStore(root string) *userStore {
-	return &userStore{root: root}
+// NewUserStore creates a store rooted at the given directory.
+func NewUserStore(root string) *UserStore {
+	return &UserStore{root: root}
 }
 
 type registerRequest struct {
@@ -50,7 +53,7 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-func (s *userStore) register(req registerRequest) (int, int, error) {
+func (s *UserStore) register(req registerRequest) (int, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -91,7 +94,7 @@ func (s *userStore) register(req registerRequest) (int, int, error) {
 	return uid, 0, nil
 }
 
-func (s *userStore) login(query, password string) bool {
+func (s *UserStore) login(query, password string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -108,7 +111,7 @@ func (s *userStore) login(query, password string) bool {
 	return false
 }
 
-func (s *userStore) loadUsers() ([]user, error) {
+func (s *UserStore) loadUsers() ([]user, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -137,7 +140,8 @@ func (s *userStore) loadUsers() ([]user, error) {
 	return users, nil
 }
 
-func registerHandler(store *userStore) gin.HandlerFunc {
+// RegisterHandler handles POST /api/register.
+func RegisterHandler(store *UserStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req registerRequest
 		if c.ShouldBindJSON(&req) != nil {
@@ -162,7 +166,8 @@ func registerHandler(store *userStore) gin.HandlerFunc {
 	}
 }
 
-func loginHandler(store *userStore) gin.HandlerFunc {
+// LoginHandler handles POST /api/login.
+func LoginHandler(store *UserStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req loginRequest
 		if c.ShouldBindJSON(&req) != nil || req.Query == "" || req.Password == "" || !store.login(req.Query, req.Password) {
@@ -184,7 +189,7 @@ func validateRegister(req registerRequest) int {
 	if err != nil || address.Address != req.Email || !strings.Contains(req.Email, "@") {
 		return 3
 	}
-	if !passwordPattern.MatchString(req.Password) {
+	if !pwdPattern.MatchString(req.Password) {
 		return 4
 	}
 	return 0
