@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/rand"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"Astraccounts/auth"
@@ -11,6 +14,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
+
+// defaultTokenValidSecs is used when TOKEN_VALID_SECS is not set.
+const defaultTokenValidSecs = 3600
 
 func main() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
@@ -22,6 +28,18 @@ func main() {
 
 	configureGinMode()
 	store := auth.NewUserStore(filepath.Join("data", "user"))
+	issuer, err := tokenIssuerFromEnv()
+	if err != nil {
+		logger.Error("Invalid token configuration", "err", err)
+		return
+	}
+
+	schema, err := auth.ParseProfileSchema(os.Getenv("ALLOWED_PROFILE_KEY"))
+	if err != nil {
+		logger.Error("Invalid ALLOWED_PROFILE_KEY configuration", "err", err)
+		return
+	}
+	logger.Info("Profile schema loaded", "keys", schema.Len())
 
 	r := gin.New()
 	r.Use(logger.GinLogger(), logger.GinRecovery())
@@ -34,12 +52,39 @@ func main() {
 		c.JSON(200, gin.H{"status": 200})
 	})
 	r.POST("/api/register", auth.RegisterHandler(store))
-	r.POST("/api/login", auth.LoginHandler(store))
+	r.POST("/api/login", auth.LoginHandler(store, issuer))
+	r.POST("/api/profile/edit", auth.ProfileEditHandler(store, issuer, schema))
+	r.POST("/api/profile/view", auth.ProfileViewHandler(store, issuer, schema))
 
 	logger.Info("HTTP server starting", "addr", ":8080")
 	if err := r.Run(":8080"); err != nil {
 		logger.Error("HTTP server stopped", "err", err)
 	}
+}
+
+// tokenIssuerFromEnv builds the login token issuer from TOKEN_VALID_SECS and
+// TOKEN_SECRET.
+func tokenIssuerFromEnv() (*auth.TokenIssuer, error) {
+	validSecs := int64(defaultTokenValidSecs)
+	if raw := strings.TrimSpace(os.Getenv("TOKEN_VALID_SECS")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			return nil, fmt.Errorf("TOKEN_VALID_SECS must be a positive integer, got %q", raw)
+		}
+		validSecs = parsed
+	}
+
+	secret := []byte(os.Getenv("TOKEN_SECRET"))
+	if len(secret) == 0 {
+		secret = make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			return nil, err
+		}
+		logger.Warn("TOKEN_SECRET is not set, generated a random one; tokens stop working after a restart")
+	}
+
+	logger.Info("Login tokens configured", "valid_secs", validSecs)
+	return auth.NewTokenIssuer(secret, validSecs), nil
 }
 
 func configureGinMode() {

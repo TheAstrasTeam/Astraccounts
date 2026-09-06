@@ -24,12 +24,11 @@ var (
 )
 
 type user struct {
-	Username string `json:"username"`
-	ID       string `json:"id"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	UID      int    `json:"UID"`
-	Register int64  `json:"register"`
+	ID       string         `json:"id"`
+	Email    string         `json:"email"`
+	Password string         `json:"password"`
+	UID      int            `json:"UID"`
+	Profile  map[string]any `json:"profile"`
 }
 
 // UserStore persists users as data/user/[UID]/user.json files.
@@ -83,41 +82,105 @@ func (s *UserStore) register(req registerRequest) (int, int, error) {
 		return 0, 0, err
 	}
 	newUser := user{
-		Username: req.Username,
 		ID:       req.ID,
 		Email:    req.Email,
 		Password: string(hash),
 		UID:      uid,
-		Register: time.Now().Unix(),
+		// The server owns both built-in profile keys at registration time.
+		Profile: map[string]any{
+			ProfileKeyUsername: req.Username,
+			ProfileKeyRegister: time.Now().Unix(),
+		},
 	}
-	if err := os.MkdirAll(filepath.Join(s.root, strconv.Itoa(uid)), 0755); err != nil {
-		return 0, 0, err
-	}
-	data, err := json.MarshalIndent(newUser, "", "  ")
-	if err != nil {
-		return 0, 0, err
-	}
-	if err := os.WriteFile(filepath.Join(s.root, strconv.Itoa(uid), "user.json"), append(data, '\n'), 0600); err != nil {
+	if err := s.writeUser(newUser); err != nil {
 		return 0, 0, err
 	}
 	return uid, 0, nil
 }
 
-func (s *UserStore) login(query, password string) bool {
+// login reports the matched user's ID when the credentials are correct.
+func (s *UserStore) login(query, password string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	users, err := s.loadUsers()
 	if err != nil {
-		return false
+		return "", false
 	}
 	for _, existing := range users {
 		if (existing.ID == query || strings.EqualFold(existing.Email, query)) &&
 			bcrypt.CompareHashAndPassword([]byte(existing.Password), []byte(password)) == nil {
-			return true
+			return existing.ID, true
 		}
 	}
-	return false
+	return "", false
+}
+
+// updateProfile merges updates into the profile of the given UID. The token
+// must be valid and belong to that user.
+func (s *UserStore) updateProfile(uid int, token string, issuer *TokenIssuer, updates map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target, found, err := s.readUser(uid)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errProfileDenied
+	}
+	id, ok := issuer.Verify(token)
+	if !ok || id != target.ID {
+		return errProfileDenied
+	}
+
+	if len(updates) == 0 {
+		return nil
+	}
+	if target.Profile == nil {
+		target.Profile = make(map[string]any, len(updates))
+	}
+	for key, value := range updates {
+		target.Profile[key] = value
+	}
+	return s.writeUser(target)
+}
+
+// userPath returns the on-disk location of a user record.
+func (s *UserStore) userPath(uid int) string {
+	return filepath.Join(s.root, strconv.Itoa(uid), "user.json")
+}
+
+// readUser loads a single user by UID. The second result is false when no such
+// user exists.
+func (s *UserStore) readUser(uid int) (user, bool, error) {
+	if uid < 1 {
+		return user{}, false, nil
+	}
+	data, err := os.ReadFile(s.userPath(uid))
+	if errors.Is(err, os.ErrNotExist) {
+		return user{}, false, nil
+	}
+	if err != nil {
+		return user{}, false, err
+	}
+	var existing user
+	if err := json.Unmarshal(data, &existing); err != nil {
+		return user{}, false, err
+	}
+	return existing, true, nil
+}
+
+// writeUser stores a user record, creating its directory when needed.
+func (s *UserStore) writeUser(u user) error {
+	if err := os.MkdirAll(filepath.Dir(s.userPath(u.UID)), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(u, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.userPath(u.UID), append(data, '\n'), 0600)
 }
 
 func (s *UserStore) loadUsers() ([]user, error) {
@@ -176,14 +239,19 @@ func RegisterHandler(store *UserStore) gin.HandlerFunc {
 }
 
 // LoginHandler handles POST /api/login.
-func LoginHandler(store *UserStore) gin.HandlerFunc {
+func LoginHandler(store *UserStore, issuer *TokenIssuer) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req loginRequest
-		if c.ShouldBindJSON(&req) != nil || req.Query == "" || req.Password == "" || !store.login(req.Query, req.Password) {
+		if c.ShouldBindJSON(&req) != nil || req.Query == "" || req.Password == "" {
 			c.JSON(400, gin.H{"status": 400})
 			return
 		}
-		c.JSON(200, gin.H{"status": 200})
+		id, ok := store.login(req.Query, req.Password)
+		if !ok {
+			c.JSON(400, gin.H{"status": 400})
+			return
+		}
+		c.JSON(200, gin.H{"status": 200, "token": issuer.Issue(id)})
 	}
 }
 

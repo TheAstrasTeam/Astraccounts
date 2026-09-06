@@ -20,6 +20,9 @@ REGISTER_ERRORS = {
     4: "invalid password",
 }
 
+# Holds the token from the most recent successful login.
+SESSION: dict[str, str] = {"token": ""}
+
 
 def request(base_url: str, method: str, path: str, payload: dict | None = None) -> tuple[int, object]:
     data = None
@@ -98,18 +101,137 @@ def do_login(base_url: str) -> None:
     }
     status, body = request(base_url, "POST", "/api/login", payload)
     show(status, body)
-    print("  Login succeeded" if status == 200 else "  Login failed: User does not exist or wrong password")
+
+    if status == 200 and isinstance(body, dict):
+        SESSION["token"] = body.get("token", "")
+        print("  Login succeeded, token remembered for profile calls")
+    else:
+        print("  Login failed: User does not exist or wrong password")
+
+
+def parse_value(raw: str) -> object:
+    """Turn console input into a JSON string, number or bool.
+
+    123 -> number, true/false -> bool, anything else -> string.
+    Wrap in double quotes to force a string, e.g. "123".
+    """
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        return text[1:-1]
+    if text.lower() == "true":
+        return True
+    if text.lower() == "false":
+        return False
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def ask_uid(prompt: str) -> int | None:
+    raw = ask(prompt)
+    try:
+        return int(raw)
+    except ValueError:
+        print("  UID must be a number")
+        return None
+
+
+def ask_token(base_url: str) -> str:
+    """Reuse the remembered token unless another one is typed in."""
+    remembered = SESSION.get("token", "")
+    if remembered:
+        entered = ask("Token (Enter to reuse the one from login): ")
+        return entered or remembered
+    return ask("Token: ")
+
+
+def do_profile_edit(base_url: str) -> None:
+    uid = ask_uid("UID: ")
+    if uid is None:
+        return
+    token = ask_token(base_url)
+
+    print("  Enter key/value pairs, empty key to finish.")
+    print("  Values: 123 -> number, true/false -> bool, \"123\" -> string")
+    content = []
+    while True:
+        key = ask(f"  content[{len(content)}].key: ")
+        if not key:
+            break
+        value = parse_value(ask(f"  content[{len(content)}].value: "))
+        content.append({"key": key, "value": value})
+        print(f"    staged {key} = {json.dumps(value, ensure_ascii=False)}")
+
+    if not content:
+        print("  Nothing to send")
+        return
+
+    status, body = request(
+        base_url, "POST", "/api/profile/edit",
+        {"UID": uid, "token": token, "content": content},
+    )
+    show(status, body)
+
+    if status == 200:
+        print("  Profile updated")
+    elif isinstance(body, dict) and "invalid" in body:
+        rejected = ", ".join(json.dumps(k, ensure_ascii=False) for k in body["invalid"])
+        print(f"  Rejected keys: {rejected}")
+        print("  Nothing was written; check ALLOWED_PROFILE_KEY and value types")
+    else:
+        print("  Failed: unknown UID, or token missing/invalid/belongs to another user")
+
+
+def do_profile_view(base_url: str) -> None:
+    uid = ask_uid("UID: ")
+    if uid is None:
+        return
+
+    payload: dict[str, object] = {"UID": uid}
+    remembered = SESSION.get("token", "")
+    hint = "Token (Enter to reuse the one from login, '-' for anonymous): " if remembered \
+        else "Token (Enter for anonymous): "
+    token = ask(hint)
+    if token == "-":
+        token = ""
+    elif not token:
+        token = remembered
+    if token:
+        payload["token"] = token
+
+    status, body = request(base_url, "POST", "/api/profile/view", payload)
+    show(status, body)
+
+    if status == 200:
+        print("  Private keys are only included when the token belongs to this UID")
+    else:
+        print("  Failed: user does not exist")
 
 
 MENU = """
 ==== Astraccounts Test ====
 Current API URL: {base_url}
-1) Helath Check  GET  /api/health
-2) Register      POST /api/register
-3) Login      POST /api/login
-4) Edit API URL
+Token: {token}
+1) Helath Check   GET  /api/health
+2) Register       POST /api/register
+3) Login          POST /api/login
+4) Edit Profile   POST /api/profile/edit
+5) View Profile   POST /api/profile/view
+6) Edit API URL
 0) Exit
 """
+
+
+def token_hint() -> str:
+    token = SESSION.get("token", "")
+    if not token:
+        return "(none, log in first)"
+    return token if len(token) <= 28 else f"{token[:24]}..."
 
 
 def main() -> int:
@@ -119,10 +241,16 @@ def main() -> int:
         else os.getenv("ASTRACCOUNTS_BASE_URL", DEFAULT_BASE_URL)
     )
 
-    actions = {"1": do_health, "2": do_register, "3": do_login}
+    actions = {
+        "1": do_health,
+        "2": do_register,
+        "3": do_login,
+        "4": do_profile_edit,
+        "5": do_profile_view,
+    }
 
     while True:
-        print(MENU.format(base_url=base_url))
+        print(MENU.format(base_url=base_url, token=token_hint()))
         try:
             choice = ask("Please choose: ")
         except EOFError:
@@ -131,7 +259,7 @@ def main() -> int:
 
         if choice == "0":
             return 0
-        if choice == "4":
+        if choice == "6":
             entered = ask(f"New API URL（Enter to use {base_url}）: ")
             if entered:
                 base_url = entered
