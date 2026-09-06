@@ -217,24 +217,24 @@ func RegisterHandler(store *UserStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req registerRequest
 		if c.ShouldBindJSON(&req) != nil {
-			c.JSON(400, gin.H{"status": "400", "err": 0})
+			c.JSON(400, gin.H{"status": 400, "err": 0})
 			return
 		}
 		if errCode := validateRegister(req); errCode != 0 {
-			c.JSON(400, gin.H{"status": "400", "err": errCode})
+			c.JSON(400, gin.H{"status": 400, "err": errCode})
 			return
 		}
 		uid, errCode, err := store.register(req)
 		if err != nil {
 			logger.Error("Failed to register user", "err", err)
-			c.JSON(500, gin.H{"status": "500"})
+			c.JSON(500, gin.H{"status": 500})
 			return
 		}
 		if errCode != 0 {
-			c.JSON(400, gin.H{"status": "400", "err": errCode})
+			c.JSON(400, gin.H{"status": 400, "err": errCode})
 			return
 		}
-		c.JSON(201, gin.H{"status": "201", "UID": uid})
+		c.JSON(201, gin.H{"status": 201, "UID": uid})
 	}
 }
 
