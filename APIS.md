@@ -21,6 +21,11 @@ All JSON responses use UTF-8.
 | `GET` | `/api/health` | Health check | `200` |
 | `POST` | `/api/register` | Register a user | `201` |
 | `POST` | `/api/login` | Login and obtain token | `200` |
+| `POST` | `/api/login/totp` | Login with TOTP code | `200` |
+| `POST` | `/api/login/recovery_code` | Login with recovery code | `200` |
+| `POST` | `/api/totp/sign` | Generate TOTP secret (unverified) | `200` |
+| `POST` | `/api/totp/verify` | Verify TOTP code and activate | `200` |
+| `POST` | `/api/totp/unsign` | Remove TOTP from a user | `200` |
 | `POST` | `/api/profile/edit` | Edit user profile | `200` |
 | `POST` | `/api/profile/view` | View user profile | `200` |
 
@@ -223,6 +228,300 @@ Returns HTTP `400` when the user does not exist, password is incorrect, JSON is 
 ```
 
 To prevent account enumeration, non-existent users and wrong passwords yield the exact same error response.
+
+## `POST /api/totp/sign`
+
+Generate a TOTP secret and return the `otpauth://` URI. This does **not** require a token; you must re-enter your ID/email and password. TOTP is **not yet active** after this call — you must call `/api/totp/verify` with a valid code to complete setup.
+
+### Request
+
+```http
+POST /api/totp/sign
+Content-Type: application/json
+```
+
+```json
+{
+  "query": "ExampleUser",
+  "password": "Example123456*"
+}
+```
+
+### Request Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | Yes | User ID or email address |
+| `password` | string | Yes | User password |
+
+### Success Response
+
+HTTP `200`:
+
+```json
+{
+  "status": 200,
+  "otpauth_url": "otpauth://totp/Astraccounts:ExampleUser?algorithm=SHA1&digits=6&issuer=Astraccounts&period=30&secret=JBSWY3DPEHPK3PXP"
+}
+```
+
+The `otpauth_url` is a standard [otpauth URI](https://github.com/google/google-authenticator/wiki/Key-Uri-Format) that can be scanned as a QR code by authenticator apps (Google Authenticator, Authy, etc.).
+
+You can call `/api/totp/sign` again to get a fresh secret (for example if the user lost the QR code) **as long as** you have not yet called `/api/totp/verify` successfully.
+
+### TOTP Already Verified
+
+HTTP `400`:
+
+```json
+{
+  "status": 400,
+  "err": 1
+}
+```
+
+TOTP is already active. Call `/api/totp/unsign` first to remove it.
+
+### Authentication Failure
+
+HTTP `400`:
+
+```json
+{
+  "status": 400
+}
+```
+
+Returned when the user does not exist or the password is incorrect.
+
+## `POST /api/totp/verify`
+
+Verify a TOTP code to activate two-factor authentication. This does **not** require a token; you must re-enter your ID/email and password. On success, recovery codes are returned. On failure, the TOTP secret is removed and you must start over from `/api/totp/sign`.
+
+### Request
+
+```http
+POST /api/totp/verify
+Content-Type: application/json
+```
+
+```json
+{
+  "query": "ExampleUser",
+  "password": "Example123456*",
+  "code": "123456"
+}
+```
+
+### Request Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | Yes | User ID or email address |
+| `password` | string | Yes | User password |
+| `code` | string | Yes | 6-digit TOTP code from authenticator app |
+
+### Success Response
+
+HTTP `200`:
+
+```json
+{
+  "status": 200,
+  "recovery_codes": [
+    "72OS-3ZWM-5BGR-TFLR",
+    "GJ2W-R5CZ-IRGN-WDJS",
+    "ODKC-JC3H-KNWF-OCOS",
+    "IAZS-AQDT-W2LK-H3ZZ",
+    "JMNIV-ZJYM-XP5M-DVSO",
+    "XL7D-ULYK-6NHY-RR72",
+    "OS3Z-WM5B-GR2T-FLRME",
+    "POZG-J2WR-5CZI-RGNW",
+    "DAJS-ODKC-JC3H-KNWF",
+    "OCOS-IAZS-AQDT-W2LK"
+  ]
+}
+```
+
+10 recovery codes are generated. Each can only be used **once** to log in if the user loses access to their authenticator app. Store them securely — they cannot be viewed again after this response.
+
+### Verification Failed
+
+HTTP `400`:
+
+```json
+{
+  "status": 400
+}
+```
+
+The code was incorrect. The TOTP secret is **removed** entirely — you must call `/api/totp/sign` again to start over.
+
+### Not Ready to Verify
+
+HTTP `400`:
+
+```json
+{
+  "status": 400
+}
+```
+
+TOTP has not been set up via `/api/totp/sign`, or it has already been verified.
+
+## `POST /api/totp/unsign`
+
+Remove (unsign) TOTP two-factor authentication from a user. This does **not** require a token; you must re-enter your ID/email and password.
+
+### Request
+
+```http
+POST /api/totp/unsign
+Content-Type: application/json
+```
+
+```json
+{
+  "query": "ExampleUser",
+  "password": "Example123456*"
+}
+```
+
+### Request Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | Yes | User ID or email address |
+| `password` | string | Yes | User password |
+
+### Success Response
+
+HTTP `200`:
+
+```json
+{
+  "status": 200
+}
+```
+
+### TOTP Not Set Up
+
+HTTP `400`:
+
+```json
+{
+  "status": 400,
+  "err": 2
+}
+```
+
+### Authentication Failure
+
+HTTP `400`:
+
+```json
+{
+  "status": 400
+}
+```
+
+Returned when the user does not exist or the password is incorrect.
+
+## `POST /api/login/totp`
+
+Log in using a TOTP code from an authenticator app. TOTP must have been set up via `/api/totp/sign` and **verified** via `/api/totp/verify` first. Login is rejected if TOTP is not set up or not yet verified.
+
+### Request
+
+```http
+POST /api/login/totp
+Content-Type: application/json
+```
+
+```json
+{
+  "query": "ExampleUser",
+  "code": "123456"
+}
+```
+
+### Request Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | Yes | User ID or email address |
+| `code` | string | Yes | 6-digit TOTP code from authenticator app |
+
+### Success Response
+
+HTTP `200`:
+
+```json
+{
+  "status": 200,
+  "token": "aat_ExampleUser_1788615478_f6e0205b57203f83614640ab7b0c07d3d927f1a38eb6a292a3bf2856fa2eeeba"
+}
+```
+
+### Login Failure
+
+HTTP `400`:
+
+```json
+{
+  "status": 400
+}
+```
+
+Returned when the user does not exist, TOTP is not enabled, or the code is invalid.
+
+## `POST /api/login/recovery_code`
+
+Log in using a recovery code generated by `/api/totp/verify`. Each recovery code can only be used **once**; it is automatically consumed after a successful login. TOTP must be verified to use recovery codes.
+
+### Request
+
+```http
+POST /api/login/recovery_code
+Content-Type: application/json
+```
+
+```json
+{
+  "query": "ExampleUser",
+  "recovery_code": "72OS-3ZWM-5BGR-TFLR"
+}
+```
+
+### Request Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | Yes | User ID or email address |
+| `recovery_code` | string | Yes | One of the recovery codes from TOTP sign-up |
+
+### Success Response
+
+HTTP `200`:
+
+```json
+{
+  "status": 200,
+  "token": "aat_ExampleUser_1788615478_f6e0205b57203f83614640ab7b0c07d3d927f1a38eb6a292a3bf2856fa2eeeba"
+}
+```
+
+### Login Failure
+
+HTTP `400`:
+
+```json
+{
+  "status": 400
+}
+```
+
+Returned when the user does not exist, TOTP is not enabled, or the recovery code is invalid/already used.
 
 ## Profile Fields
 

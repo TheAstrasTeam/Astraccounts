@@ -53,6 +53,11 @@ func main() {
 	})
 	r.POST("/api/register", auth.RegisterHandler(store))
 	r.POST("/api/login", auth.LoginHandler(store, issuer))
+	r.POST("/api/login/totp", auth.TotpLoginHandler(store, issuer))
+	r.POST("/api/login/recovery_code", auth.RecoveryCodeLoginHandler(store, issuer))
+	r.POST("/api/totp/sign", auth.TotpSignHandler(store))
+	r.POST("/api/totp/verify", auth.TotpVerifyHandler(store))
+	r.POST("/api/totp/unsign", auth.TotpUnsignHandler(store))
 	r.POST("/api/profile/edit", auth.ProfileEditHandler(store, issuer, schema))
 	r.POST("/api/profile/view", auth.ProfileViewHandler(store, issuer, schema))
 

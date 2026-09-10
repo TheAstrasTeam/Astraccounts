@@ -24,11 +24,14 @@ var (
 )
 
 type user struct {
-	ID       string         `json:"id"`
-	Email    string         `json:"email"`
-	Password string         `json:"password"`
-	UID      int            `json:"UID"`
-	Profile  map[string]any `json:"profile"`
+	ID            string         `json:"id"`
+	Email         string         `json:"email"`
+	Password      string         `json:"password"`
+	UID           int            `json:"UID"`
+	Profile       map[string]any `json:"profile"`
+	TOTPSecret    string         `json:"totp_secret,omitempty"`
+	TOTPVerified  bool           `json:"totp_verified,omitempty"`
+	RecoveryCodes []string       `json:"recovery_codes,omitempty"`
 }
 
 // UserStore persists users as data/user/[UID]/user.json files.

@@ -20,6 +20,11 @@ REGISTER_ERRORS = {
     4: "invalid password",
 }
 
+TOTP_ERRORS = {
+    1: "TOTP already verified",
+    2: "TOTP not set up",
+}
+
 # Holds the token from the most recent successful login.
 SESSION: dict[str, str] = {"token": ""}
 
@@ -107,6 +112,93 @@ def do_login(base_url: str) -> None:
         print("  Login succeeded, token remembered for profile calls")
     else:
         print("  Login failed: User does not exist or wrong password")
+
+
+def do_totp_sign(base_url: str) -> None:
+    payload = {
+        "query": ask("ID or E-mail Address: "),
+        "password": ask_password("Password: "),
+    }
+    status, body = request(base_url, "POST", "/api/totp/sign", payload)
+    show(status, body)
+
+    if status == 200 and isinstance(body, dict):
+        print("  TOTP secret generated")
+        print("  Scan this otpauth URL with your authenticator app:")
+        print(f"  {body.get('otpauth_url', '')}")
+        print("  Call TOTP Verify next to activate.")
+    elif isinstance(body, dict) and "err" in body:
+        code = body["err"]
+        print(f"  Failed: {TOTP_ERRORS.get(code, 'Unknown error code')}")
+    else:
+        print("  Failed: wrong password")
+
+
+def do_totp_verify(base_url: str) -> None:
+    payload = {
+        "query": ask("ID or E-mail Address: "),
+        "password": ask_password("Password: "),
+        "code": ask("TOTP Code (6 digits): "),
+    }
+    status, body = request(base_url, "POST", "/api/totp/verify", payload)
+    show(status, body)
+
+    if status == 200 and isinstance(body, dict):
+        codes = body.get("recovery_codes", [])
+        print("  TOTP verified and activated!")
+        print(f"  You received {len(codes)} recovery codes (shown once, save them now):")
+        for i, code in enumerate(codes, 1):
+            print(f"    {i:2d}. {code}")
+    else:
+        print("  Verification failed, TOTP secret was removed. Call TOTP Sign to start over.")
+
+
+def do_totp_unsign(base_url: str) -> None:
+    payload = {
+        "query": ask("ID or E-mail Address: "),
+        "password": ask_password("Password: "),
+    }
+    status, body = request(base_url, "POST", "/api/totp/unsign", payload)
+    show(status, body)
+
+    if status == 200:
+        print("  TOTP removed")
+    elif isinstance(body, dict) and "err" in body:
+        code = body["err"]
+        print(f"  Failed: {TOTP_ERRORS.get(code, 'Unknown error code')}")
+    else:
+        print("  Failed: wrong password")
+
+
+def do_login_totp(base_url: str) -> None:
+    payload = {
+        "query": ask("ID or E-mail Address: "),
+        "code": ask("TOTP Code (6 digits): "),
+    }
+    status, body = request(base_url, "POST", "/api/login/totp", payload)
+    show(status, body)
+
+    if status == 200 and isinstance(body, dict):
+        SESSION["token"] = body.get("token", "")
+        print("  Login succeeded, token remembered for profile calls")
+    else:
+        print("  Failed: TOTP not set up, not verified, or wrong code")
+
+
+def do_login_recovery(base_url: str) -> None:
+    payload = {
+        "query": ask("ID or E-mail Address: "),
+        "recovery_code": ask("Recovery Code: "),
+    }
+    status, body = request(base_url, "POST", "/api/login/recovery_code", payload)
+    show(status, body)
+
+    if status == 200 and isinstance(body, dict):
+        SESSION["token"] = body.get("token", "")
+        print("  Login succeeded, token remembered for profile calls")
+        print("  (That recovery code has been consumed and cannot be used again)")
+    else:
+        print("  Failed: TOTP not set up, not verified, or recovery code invalid/already used")
 
 
 def parse_value(raw: str) -> object:
@@ -217,12 +309,17 @@ MENU = """
 ==== Astraccounts Test ====
 Current API URL: {base_url}
 Token: {token}
-1) Helath Check   GET  /api/health
-2) Register       POST /api/register
-3) Login          POST /api/login
-4) Edit Profile   POST /api/profile/edit
-5) View Profile   POST /api/profile/view
-6) Edit API URL
+1) Health Check       GET  /api/health
+2) Register           POST /api/register
+3) Login              POST /api/login
+4) TOTP Sign          POST /api/totp/sign
+5) TOTP Verify        POST /api/totp/verify
+6) TOTP Unsign        POST /api/totp/unsign
+7) Login (TOTP)       POST /api/login/totp
+8) Login (Recovery)   POST /api/login/recovery_code
+9) Edit Profile       POST /api/profile/edit
+10) View Profile      POST /api/profile/view
+11) Edit API URL
 0) Exit
 """
 
@@ -245,8 +342,13 @@ def main() -> int:
         "1": do_health,
         "2": do_register,
         "3": do_login,
-        "4": do_profile_edit,
-        "5": do_profile_view,
+        "4": do_totp_sign,
+        "5": do_totp_verify,
+        "6": do_totp_unsign,
+        "7": do_login_totp,
+        "8": do_login_recovery,
+        "9": do_profile_edit,
+        "10": do_profile_view,
     }
 
     while True:
@@ -259,7 +361,7 @@ def main() -> int:
 
         if choice == "0":
             return 0
-        if choice == "6":
+        if choice == "11":
             entered = ask(f"New API URL（Enter to use {base_url}）: ")
             if entered:
                 base_url = entered

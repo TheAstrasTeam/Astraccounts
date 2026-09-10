@@ -9,3 +9,6 @@ data/user/
 
 # OpenCode
 opencode.json
+
+#__pycache__
+scripts/__pycache__
