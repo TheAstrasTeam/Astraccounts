@@ -82,6 +82,11 @@ TTY and a running server — never invoke it as an automated check.
 - `auth/` — one package. `auth.go` (store + register/login), `token.go` (HMAC
   tokens), `profile.go` (`ALLOWED_PROFILE_KEY` schema), `totp.go` (TOTP + recovery
   codes). `UserStore` is the only disk gateway.
+- `mail/` — one package. `config.go` (env parsing), `store.go` (per-user mailboxes
+  on disk), `smtp.go` (MX + submission), `pop3.go` (RFC 1939), `imap.go` (go-imap
+  v1 backend), `relay.go` (outbound queue, MX lookup, DKIM). `Store` is the only
+  disk gateway. Every mutation serialises through a mutex; message bodies are
+  immutable files.
 - `logger/` — slog handler with ANSI colors plus `GinLogger`/`GinRecovery`. Use
   `logger.Info/Warn/Error`, never `log` or `fmt.Print`.
 
@@ -119,6 +124,29 @@ Implementation traps:
   `/api/totp/verify` activates it and issues 10 one-time recovery codes. A failed
   verify wipes the secret entirely. `/api/login/totp` rejects unverified secrets.
   Recovery codes are stored in plaintext in `user.json` (passwords are bcrypt).
+
+Mail implementation traps:
+
+- Mail is opt-in: with no `MAIL_DOMAIN` the service runs exactly as before.
+  A silent immediate exit on startup means bad `.env`, not a crash.
+- The MX listener (port 25) and submission listener (587) are separate and have
+  different policies: MX never relays, submission only relays for authenticated
+  users. This is what prevents an open relay.
+- Submission requires EHLO before MAIL FROM. Clients that skip it get 502.
+- IMAP backend uses go-imap v1 (stable); v2 is still beta and not used here.
+- `Store.Append` materialises INBOX on demand — a user can be registered and
+  immediately receive mail without any explicit provisioning step.
+- UIDs are never reused: `UIDNext` only increments. EXPUNGE deletes the file and
+  leaves a gap, which IMAP clients expect.
+- The outbound queue serialises every retry through a single goroutine; the
+  retry ladder is ~2 days (5m, 10m, 20m... capped at 6h). `MAIL_RELAY=false`
+  disables it entirely.
+- DKIM signing is additive: a signing failure logs a warning but the message is
+  still sent unsigned, because an unsigned message is better than a bounced one.
+- TLS cert is shared by all mail listeners. Without it, plaintext listeners run,
+  STLS is offered on 25/587/110/143, and implicit-TLS ports (465/995/993) stay
+  closed. A `WARN` is logged but it is not a startup error.
+- `Received` headers use RFC 5321 address literal format `[IP]`, not `IP:port`.
 
 ## Docs and workflow
 

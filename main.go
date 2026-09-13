@@ -1,16 +1,22 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"Astraccounts/auth"
 	"Astraccounts/logger"
+	"Astraccounts/mail"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
@@ -27,7 +33,8 @@ func main() {
 	}
 
 	configureGinMode()
-	store := auth.NewUserStore(filepath.Join("data", "user"))
+	dataDir := "data"
+	store := auth.NewUserStore(filepath.Join(dataDir, "user"))
 	issuer, err := tokenIssuerFromEnv()
 	if err != nil {
 		logger.Error("Invalid token configuration", "err", err)
@@ -41,6 +48,17 @@ func main() {
 	}
 	logger.Info("Profile schema loaded", "keys", schema.Len())
 
+	mailConfig, err := mail.ConfigFromEnv()
+	if err != nil {
+		logger.Error("Invalid mail configuration", "err", err)
+		return
+	}
+	mailServer, err := startMail(mailConfig, store, dataDir)
+	if err != nil {
+		logger.Error("Mail server failed to start", "err", err)
+		return
+	}
+
 	r := gin.New()
 	r.Use(logger.GinLogger(), logger.GinRecovery())
 	if err := configureTrustedProxies(r); err != nil {
@@ -51,7 +69,7 @@ func main() {
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": 200})
 	})
-	r.POST("/api/register", auth.RegisterHandler(store))
+	r.POST("/api/register", auth.RegisterHandler(store, mailConfig.Domain))
 	r.POST("/api/login", auth.LoginHandler(store, issuer))
 	r.POST("/api/login/totp", auth.TotpLoginHandler(store, issuer))
 	r.POST("/api/login/recovery_code", auth.RecoveryCodeLoginHandler(store, issuer))
@@ -61,10 +79,64 @@ func main() {
 	r.POST("/api/profile/edit", auth.ProfileEditHandler(store, issuer, schema))
 	r.POST("/api/profile/view", auth.ProfileViewHandler(store, issuer, schema))
 
-	logger.Info("HTTP server starting", "addr", ":8080")
-	if err := r.Run(":8080"); err != nil {
-		logger.Error("HTTP server stopped", "err", err)
+	serve(r, mailServer)
+}
+
+// serve runs the HTTP server until it fails or the process is asked to stop,
+// then shuts the HTTP and mail servers down in an orderly fashion.
+func serve(handler *gin.Engine, mailServer *mail.Server) {
+	httpServer := &http.Server{Addr: ":8080", Handler: handler}
+
+	failed := make(chan error, 1)
+	go func() {
+		logger.Info("HTTP server starting", "addr", ":8080")
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			failed <- err
+			return
+		}
+		failed <- nil
+	}()
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-failed:
+		if err != nil {
+			logger.Error("HTTP server stopped", "err", err)
+		}
+	case received := <-signals:
+		logger.Info("Shutdown requested", "signal", received.String())
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := httpServer.Shutdown(ctx); err != nil {
+		logger.Error("HTTP server shutdown failed", "err", err)
+	}
+	if mailServer != nil {
+		if err := mailServer.Shutdown(ctx); err != nil {
+			logger.Error("Mail server shutdown failed", "err", err)
+		}
+	}
+}
+
+// startMail brings up the SMTP, POP3 and IMAP listeners. Mail is opt-in: with
+// no MAIL_DOMAIN configured the service runs exactly as it did before.
+func startMail(config *mail.Config, store *auth.UserStore, dataDir string) (*mail.Server, error) {
+	if !config.Enabled() {
+		logger.Info("Mail server disabled, set MAIL_DOMAIN to enable it")
+		return nil, nil
+	}
+
+	server, err := mail.New(config, store, dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := server.Start(); err != nil {
+		return nil, err
+	}
+	return server, nil
 }
 
 // tokenIssuerFromEnv builds the login token issuer from TOKEN_VALID_SECS and

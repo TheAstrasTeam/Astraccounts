@@ -15,6 +15,7 @@ The project uses Go, Gin, and local JSON files to store user data.
 - HMAC-SHA256 login tokens
 - Gin request logging integrated with a unified colored logger
 - `.env` support for configuring Gin mode, trusted proxies, token expiration, and profile fields
+- **Built-in mail server (optional):** SMTP (MX + submission), POP3, IMAP with per-user mailboxes stored on disk. Every registered user automatically owns a mailbox at `<user-id>@MAIL_DOMAIN`. Supports STARTTLS, implicit TLS, DKIM signing, and smarthost relay.
 
 For complete API specifications, see [APIS.md](APIS.md).
 
@@ -136,7 +137,49 @@ Visibility options:
 - `profile.username`: Set by the system during registration; editable by the client afterwards
 - `profile.register`: Set by the system during registration (Unix timestamp in seconds); not editable by the client
 
-## Data Storage
+### Mail Server (`MAIL_*`)
+
+The built-in mail server is opt-in. Set `MAIL_DOMAIN` to enable it. Every
+registered user automatically owns a mailbox at `<user-id>@MAIL_DOMAIN`.
+
+```env
+# Required to enable the mail server
+MAIL_DOMAIN=example.test
+
+# Hostname advertised in SMTP banners (defaults to MAIL_DOMAIN)
+MAIL_HOSTNAME=mx.example.test
+
+# Listener addresses. Defaults are standard ports. Set to "off" to disable.
+MAIL_SMTP_ADDR=:25
+MAIL_SUBMISSION_ADDR=:587
+MAIL_SUBMISSION_TLS_ADDR=:465
+MAIL_POP3_ADDR=:110
+MAIL_POP3_TLS_ADDR=:995
+MAIL_IMAP_ADDR=:143
+MAIL_IMAP_TLS_ADDR=:993
+
+# TLS certificate for STARTTLS and implicit-TLS ports. Both required together.
+MAIL_TLS_CERT_FILE=/path/to/cert.pem
+MAIL_TLS_KEY_FILE=/path/to/key.pem
+
+# Maximum message size in bytes (default 25 MB)
+MAIL_MAX_MESSAGE_BYTES=26214400
+
+# Allow relaying to external domains (default true)
+MAIL_RELAY=true
+
+# Smarthost for outbound delivery when port 25 is blocked
+MAIL_SMARTHOST_ADDR=mail.provider.example:587
+MAIL_SMARTHOST_USER=user
+MAIL_SMARTHOST_PASSWORD=pass
+
+# DKIM signing for outgoing mail
+MAIL_DKIM_DOMAIN=example.test
+MAIL_DKIM_SELECTOR=default
+MAIL_DKIM_KEY_FILE=/path/to/dkim.key
+```
+
+See `.env.example` for the complete list with comments.
 
 User data is stored at:
 
@@ -144,7 +187,15 @@ User data is stored at:
 data/user/[UID]/user.json
 ```
 
-Example:
+Mailboxes (when `MAIL_DOMAIN` is configured) are stored at:
+
+```text
+data/user/[UID]/mail/INBOX/index.json
+data/user/[UID]/mail/INBOX/00000001.eml
+...
+```
+
+Example user.json:
 
 ```json
 {
@@ -160,7 +211,7 @@ Example:
 }
 ```
 
-Passwords are stored as bcrypt hashes; plaintext passwords are never saved. `data/user/` is added to `.gitignore`.
+Passwords are stored as bcrypt hashes; plaintext passwords are never saved. `data/` is added to `.gitignore`.
 
 ## Python Test Script
 

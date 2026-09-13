@@ -216,7 +216,11 @@ func (s *UserStore) loadUsers() ([]user, error) {
 }
 
 // RegisterHandler handles POST /api/register.
-func RegisterHandler(store *UserStore) gin.HandlerFunc {
+//
+// mailDomain is the domain the mail server accepts, or "" when mail is
+// disabled. When set, the response also reports the mailbox the new account
+// owns, which is the user ID at that domain.
+func RegisterHandler(store *UserStore, mailDomain string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req registerRequest
 		if c.ShouldBindJSON(&req) != nil {
@@ -237,7 +241,11 @@ func RegisterHandler(store *UserStore) gin.HandlerFunc {
 			c.JSON(400, gin.H{"status": 400, "err": errCode})
 			return
 		}
-		c.JSON(201, gin.H{"status": 201, "UID": uid})
+		if mailDomain == "" {
+			c.JSON(201, gin.H{"status": 201, "UID": uid})
+			return
+		}
+		c.JSON(201, gin.H{"status": 201, "UID": uid, "mail": req.ID + "@" + mailDomain})
 	}
 }
 
